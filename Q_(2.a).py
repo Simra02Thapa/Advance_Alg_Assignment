@@ -27,17 +27,17 @@ def strategic_tile_shatter(tile_multipliers):
 
 # Example 1 
 tiles1 = [3, 1, 5, 8]
-print("Example 1 Tiles:", tiles1)
+print("(Example 1) Tile_multipliers:", tiles1)
 print("Maximum Points:", strategic_tile_shatter(tiles1))
 print("=" * 60)
 
-# Example 2-
+# Example 2
 tiles2 = [1, 5]
-print("Example 2 Tiles:", tiles2)
+print("(Example 2) Tile_multipliers:", tiles2)
 print("Maximum Points:", strategic_tile_shatter(tiles2))
 print("=" * 60)
 
 # Example 3 (additional eg.)
 tiles3 = [2, 4, 3]
-print("Example 3 Tiles:", tiles3)
+print("(Example 3) Tile_multipliers:", tiles3)
 print("Maximum Points:", strategic_tile_shatter(tiles3))
