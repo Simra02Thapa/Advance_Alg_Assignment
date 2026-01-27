@@ -166,7 +166,7 @@ class SimulatorUI:
     def _build_ui(self):
         """Build improved user interface layout."""
 
-        # ================= LEFT CONTROL PANEL =================
+        #  LEFT CONTROL PANEL 
         left_panel = ttk.Frame(self.root, padding=10)
         left_panel.pack(side=tk.LEFT, fill=tk.Y)
 
@@ -174,7 +174,7 @@ class SimulatorUI:
                           font=("Arial", 16, "bold"))
         title.pack(pady=(0, 15))
 
-        # -------- Algorithms Section --------
+        # Algorithms Section 
         algo_frame = ttk.LabelFrame(left_panel, text="Network Algorithms", padding=10)
         algo_frame.pack(fill=tk.X, pady=5)
 
@@ -187,14 +187,14 @@ class SimulatorUI:
         ttk.Button(algo_frame, text="Bonus: Graph Coloring",
                    command=self._on_coloring_click).pack(fill=tk.X, pady=3)
 
-        # -------- Tree Section --------
+        #  Tree Section
         bst_frame = ttk.LabelFrame(left_panel, text="Command Tree (BST)", padding=10)
         bst_frame.pack(fill=tk.X, pady=5)
 
         ttk.Button(bst_frame, text="Q3: Optimize BST",
                    command=self._on_bst_click).pack(fill=tk.X, pady=3)
 
-        # -------- Failure Section --------
+        # Failure Section
         failure_frame = ttk.LabelFrame(left_panel, text="Failure Simulation", padding=10)
         failure_frame.pack(fill=tk.X, pady=5)
 
@@ -204,7 +204,7 @@ class SimulatorUI:
         ttk.Button(failure_frame, text="Reset Simulator",
                    command=self._on_reset_click).pack(fill=tk.X, pady=3)
 
-        # -------- Path Selection --------
+        # Path Selection
         path_frame = ttk.LabelFrame(left_panel, text="Path Selection", padding=10)
         path_frame.pack(fill=tk.X, pady=10)
 
@@ -218,7 +218,7 @@ class SimulatorUI:
         ttk.Combobox(path_frame, textvariable=self.target_var,
                      values=self.network.get_nodes(), state="readonly").pack(fill=tk.X, pady=2)
 
-        # -------- Status Box --------
+        # Status Box 
         status_frame = ttk.LabelFrame(left_panel, text="System Status", padding=8)
         status_frame.pack(fill=tk.BOTH, expand=True, pady=5)
 
@@ -226,7 +226,7 @@ class SimulatorUI:
                                    bg="#f4f4f4", relief=tk.SOLID, borderwidth=1)
         self.status_area.pack(fill=tk.BOTH, expand=True)
 
-        # ================= RIGHT CANVAS PANEL =================
+        # RIGHT CANVAS PANEL 
         canvas_panel = ttk.Frame(self.root, padding=5)
         canvas_panel.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
