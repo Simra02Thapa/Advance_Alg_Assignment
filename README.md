@@ -1,6 +1,4 @@
 # Advanced Algorithm Assignment
-
-**Course:** Advance Algorithm  
 **Semester:** 4th Semester  
 
 
