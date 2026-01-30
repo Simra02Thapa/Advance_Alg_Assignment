@@ -127,72 +127,29 @@ Diesel Usage: 6.1% (only during peak evening hours)
 
 ## Question 5(a) - Emergency Network Simulator
 
-**File:** `Q(5.a).py`
+**File:** `Q(5. a).py`
 
 ### Description
-An interactive GUI-based Emergency Network Simulator that models a city network for emergency response routing. The system helps find optimal paths between cities and identifies critical infrastructure.
+An interactive GUI-based Emergency Network Simulator designed for disaster response routing. The system models a city network (8 cities: A-H) where emergency responders can find optimal paths, identify vulnerable infrastructure, and simulate node failures to test network resilience.
 
 ### Features
-- **Network Visualization**: Displays cities (A-H) connected by weighted roads
-- **Minimum Spanning Tree (MST)**: Uses Kruskal's algorithm to find the minimum cost network
-- **Shortest Path Finding**: Implements Dijkstra's algorithm for primary routes
-- **Backup Path**: Finds alternative routes when primary path is unavailable
-- **Node Disabling**: Simulate city failures/emergencies
-- **Vulnerable Edge Detection**: Identifies critical roads (bridges)
-- **BST Visualization**: Displays command priorities in a Binary Search Tree
+The simulator integrates five core modules addressing different aspects of network optimization.
+ **Q1 (MST)** computes the minimum spanning tree using Kruskal's algorithm to find the most cost-efficient way to connect all cities. **Q2 (Reliable Paths)** finds K edge-disjoint paths between source and destination while avoiding vulnerable roads, ensuring backup routes exist. 
+ **Q3 (BST Optimization)** uses the DSW algorithm to balance the command hierarchy tree for efficient lookups. 
+ **Q4 (Vulnerable Roads)** allows users to mark dangerous roads which are displayed as red dotted lines and automatically avoided by pathfinding. **Q5 (Node Failure Simulation)** enables users to disable cities to simulate failures, automatically visualizing disconnected nodes and recomputing alternative routes with impact analysis.
 
 ### Algorithms Used
 - **Kruskal's Algorithm**: For MST computation - O(E log E)
-- **Dijkstra's Algorithm**: For shortest path - O((V+E) log V)
-- **Bridge Finding**: For vulnerable edge detection - O(V + E)
-- **BST Operations**: For command priority management - O(log n)
-
-### GUI Components
-1. **Network Canvas**: Visual graph with nodes and edges
-2. **Control Panel**: Buttons for MST, paths, and simulations
-3. **BST Visualizer**: Tree view of command priorities
-4. **Status Panel**: Real-time algorithm output
+- **Dijkstra's Algorithm**: For shortest path finding - O((V+E) log V)
+- **Connected Components**: For detecting disconnected nodes after failure
 
 
-### Output Reflection
-
-The GUI displays an interactive network of 8 cities (labeled A through H, numbered 0-7) connected by weighted edges representing road distances.
-
-**Key Observations:**
-- The network graph shows cities as blue circular nodes with labels
-- Edge weights (distances) are displayed in red circles on each connection
-- Cities are arranged in a visually clear layout for easy understanding
-
-**Control Panel Features:**
-1. **Route Selection**: Dropdown menus to select source and destination cities
-2. **Q1: Compute MST (Kruskal)**: Finds minimum spanning tree - highlights optimal network backbone
-3. **Q2: Find Reliable Paths**: Computes primary (green) and backup (orange) routes using Dijkstra
-4. **Bonus: Graph Coloring**: Colors nodes to show independent sets
-5. **Q3: Optimize BST (DSW)**: Balances the command priority tree
-6. **Q4: Simulate Node Failure**: Disables a city to test network resilience
-7. **Reset Simulator**: Restores original network state
-
-**Legend:**
-- Blue lines: MST edges
-- Green lines: Primary path (shortest route)
-- Orange lines: Backup path (alternative route)
-- Red lines: Dangerous/vulnerable roads (bridges)
-
-**Sample Output (MST Computation):**
-```
-MST Edges: [(A,C), (C,B), (B,D), (D,E), (E,F), (F,G), (E,H)]
-Total MST Weight: 18 units
-```
-
-**Sample Output (Shortest Path A to G):**
-```
-Primary Path: A → C → B → D → F → G
-Path Cost: 13 units
-Backup Path: A → C → E → H → G  
-Backup Cost: 24 units
-```
+### Code Reflection
+This simulator demonstrates how graph algorithms address real-world emergency routing challenges. The MST provides cost-efficient infrastructure planning, while edge-disjoint paths ensure redundancy for critical routes. The node failure simulation reveals how a single point of failure can cascade through a network, disconnecting multiple nodes and significantly increasing travel times. The interactive GUI allows users to experiment with different failure scenarios and understand network vulnerability.
 
 ---
+
+
 
 ## Question 5(b) - Multithreaded Sorting System
 

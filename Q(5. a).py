@@ -117,8 +117,58 @@ class NetworkGraph:
             return True
         return False
     
+    def enable_node(self, node_id):
+        """Re-enable a disabled node."""
+        if node_id in self.disabled_nodes:
+            self.disabled_nodes.discard(node_id)
+            return True
+        return False
+    
     def get_disabled_nodes(self):
         return self.disabled_nodes
+    
+    def get_working_graph(self):
+        """Get graph excluding disabled nodes and their edges."""
+        working = self.graph.copy()
+        for node in self.disabled_nodes:
+            if node in working.nodes():
+                working.remove_node(node)
+        return working
+    
+    def get_disconnected_nodes(self):
+        """Find nodes that become disconnected when disabled nodes are removed."""
+        if not self.disabled_nodes:
+            return set()
+        
+        working = self.get_working_graph()
+        if len(working.nodes()) == 0:
+            return set()
+        
+        # Find all connected components
+        components = list(nx.connected_components(working))
+        if len(components) <= 1:
+            return set()
+        
+        # Find the largest component (main network)
+        largest = max(components, key=len)
+        
+        # All nodes not in the largest component are "disconnected"
+        disconnected = set()
+        for comp in components:
+            if comp != largest:
+                disconnected.update(comp)
+        
+        return disconnected
+    
+    def get_path_cost(self, path):
+        """Calculate total cost of a path."""
+        if not path or len(path) < 2:
+            return 0
+        cost = 0
+        for i in range(len(path) - 1):
+            if self.graph.has_edge(path[i], path[i+1]):
+                cost += self.graph[path[i]][path[i+1]]['weight']
+        return cost
     
     def mark_vulnerable_edge(self, u, v):
         """Mark an edge as vulnerable (dangerous road)."""
@@ -141,19 +191,34 @@ class PathFinder:
     
     def __init__(self, graph, network=None):
         self.graph = graph
-        self.network = network  # Reference to network to get vulnerable edges dynamically
+        self.network = network  # Reference to network to get vulnerable/failed edges dynamically
     
-    def find_disjoint_paths(self, source, target, avoid_vulnerable=True):
-        """Find two edge-disjoint paths between source and target, optionally avoiding vulnerable roads."""
-        try:
-            # Create working graph excluding vulnerable edges if requested
-            working_graph = self.graph.copy()
-            if avoid_vulnerable and self.network:
+    def _get_working_graph(self, avoid_vulnerable=True, avoid_disabled=True):
+        """Get a working copy of graph excluding vulnerable edges and disabled nodes."""
+        working_graph = self.graph.copy()
+        
+        if self.network:
+            # Remove vulnerable edges
+            if avoid_vulnerable:
                 for u, v in self.network.vulnerable_edges:
                     if working_graph.has_edge(u, v):
                         working_graph.remove_edge(u, v)
             
-            # First path - shortest path avoiding vulnerable edges
+            # Remove disabled nodes
+            if avoid_disabled:
+                for node in self.network.disabled_nodes:
+                    if node in working_graph.nodes():
+                        working_graph.remove_node(node)
+        
+        return working_graph
+    
+    def find_disjoint_paths(self, source, target, avoid_vulnerable=True):
+        """Find two edge-disjoint paths between source and target, avoiding marked vulnerable roads and disabled nodes."""
+        try:
+            # Create working graph excluding vulnerable edges and disabled nodes
+            working_graph = self._get_working_graph(avoid_vulnerable, avoid_disabled=True)
+            
+            # First path - shortest path avoiding vulnerable roads
             path1 = nx.shortest_path(working_graph, source, target, weight='weight')
             
             # Create temporary graph without path1 edges
@@ -301,7 +366,7 @@ class SimulatorUI:
 
         # Initialize components
         self.network = NetworkGraph()
-        self.path_finder = PathFinder(self.network.graph, self.network.vulnerable_edges)
+        self.path_finder = PathFinder(self.network.graph, self.network)
         self.bst_viz = BSTVisualizer()
         self.pos = self.network.get_node_positions()
 
@@ -376,9 +441,45 @@ class SimulatorUI:
     def _build_ui(self):
         """Build improved user interface layout with modern styling."""
 
-        # LEFT CONTROL PANEL 
-        left_panel = tk.Frame(self.root, bg=COLORS['panel_bg'], padx=15, pady=10)
-        left_panel.pack(side=tk.LEFT, fill=tk.Y)
+        # LEFT CONTROL PANEL with scrolling
+        left_container = tk.Frame(self.root, bg=COLORS['panel_bg'])
+        left_container.pack(side=tk.LEFT, fill=tk.Y)
+        
+        # Create canvas for scrolling
+        self.left_canvas = tk.Canvas(left_container, bg=COLORS['panel_bg'], 
+                                     highlightthickness=0, width=280)
+        scrollbar = tk.Scrollbar(left_container, orient="vertical", 
+                                 command=self.left_canvas.yview)
+        
+        # Scrollable frame inside canvas
+        left_panel = tk.Frame(self.left_canvas, bg=COLORS['panel_bg'], padx=15, pady=10)
+        
+        # Create window in canvas
+        self.left_canvas_window = self.left_canvas.create_window((0, 0), window=left_panel, 
+                                                                  anchor="nw")
+        
+        # Configure scrolling
+        self.left_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack scrollbar and canvas
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        # Update scroll region when frame changes
+        def configure_scroll(event):
+            self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+            # Update canvas window width to match canvas
+            self.left_canvas.itemconfig(self.left_canvas_window, width=event.width)
+        
+        left_panel.bind("<Configure>", configure_scroll)
+        self.left_canvas.bind("<Configure>", lambda e: self.left_canvas.itemconfig(
+            self.left_canvas_window, width=e.width))
+        
+        # Enable mouse wheel scrolling
+        def on_mousewheel(event):
+            self.left_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        
+        self.left_canvas.bind_all("<MouseWheel>", on_mousewheel)
 
         # Title with icon
         title_frame = tk.Frame(left_panel, bg=COLORS['panel_bg'])
@@ -442,20 +543,8 @@ class SimulatorUI:
         self._create_button(bst_frame, "⚡ Q3: Optimize BST (DSW)", 
                            self._on_bst_click, COLORS['warning'])
 
-        # Failure Section
-        failure_frame = tk.LabelFrame(left_panel, text="⚠️ Failure Simulation", 
-                                      font=("Segoe UI", 11, "bold"),
-                                      fg=COLORS['dark'], bg=COLORS['light'],
-                                      padx=10, pady=10)
-        failure_frame.pack(fill=tk.X, pady=8)
-
-        self._create_button(failure_frame, "💥 Q4: Simulate Node Failure", 
-                           self._on_failure_click, COLORS['danger'])
-        self._create_button(failure_frame, "🔄 Reset Simulator", 
-                           self._on_reset_click, COLORS['edge_default'])
-
-        # Road Management Section
-        road_frame = tk.LabelFrame(left_panel, text="🚧 Road Management", 
+        # Vulnerable Roads Section (Q4)
+        road_frame = tk.LabelFrame(left_panel, text="🚧 Q4: Vulnerable Roads", 
                                    font=("Segoe UI", 11, "bold"),
                                    fg=COLORS['dark'], bg=COLORS['light'],
                                    padx=10, pady=10)
@@ -465,6 +554,37 @@ class SimulatorUI:
                            self._on_mark_vulnerable_click, COLORS['danger'])
         self._create_button(road_frame, "✅ Unmark Vulnerable Road", 
                            self._on_unmark_vulnerable_click, COLORS['success'])
+
+        # Node Failure Simulation Section (Q5)
+        failure_frame = tk.LabelFrame(left_panel, text="💥 Q5: Node Failure Simulation", 
+                                      font=("Segoe UI", 11, "bold"),
+                                      fg=COLORS['dark'], bg=COLORS['light'],
+                                      padx=10, pady=10)
+        failure_frame.pack(fill=tk.X, pady=8)
+
+        # Label for node buttons
+        tk.Label(failure_frame, text="Click node to toggle (✅=Active, ❌=Failed):", 
+                font=("Segoe UI", 9), bg=COLORS['light'], fg=COLORS['dark']).pack(anchor='w', pady=(0,5))
+
+        # Frame to hold node buttons in a grid with minimum height
+        self.node_buttons_frame = tk.Frame(failure_frame, bg=COLORS['white'], 
+                                           relief=tk.GROOVE, bd=2, height=100)
+        self.node_buttons_frame.pack(fill=tk.X, pady=5)
+        self.node_buttons_frame.pack_propagate(False)  # Maintain minimum height
+        
+        # Dictionary to store node button references
+        self.node_buttons = {}
+        
+        # Create node buttons after a small delay to ensure frame is ready
+        self.root.after(50, self._create_node_buttons)
+
+        # Action buttons below node grid
+        self._create_button(failure_frame, "📊 Analyze Network Impact", 
+                           self._on_analyze_failure_click, COLORS['info'])
+        self._create_button(failure_frame, "🔄 Reset All Nodes", 
+                           self._on_reset_nodes_click, COLORS['edge_default'])
+        self._create_button(failure_frame, "🔄 Reset Simulator", 
+                           self._on_reset_click, COLORS['warning'])
 
         # Status Box with modern styling
         status_frame = tk.LabelFrame(left_panel, text="📊 System Status", 
@@ -535,6 +655,120 @@ class SimulatorUI:
         btn.bind("<Leave>", lambda e: btn.configure(bg=color))
         return btn
     
+    def _create_node_buttons(self):
+        """Create clickable buttons for each node in the failure simulation section."""
+        # Clear existing buttons
+        for widget in self.node_buttons_frame.winfo_children():
+            widget.destroy()
+        self.node_buttons.clear()
+        
+        nodes = list(self.network.get_nodes())
+        
+        if not nodes:
+            tk.Label(self.node_buttons_frame, text="No nodes available",
+                    font=("Segoe UI", 9), bg=COLORS['white']).pack(pady=20)
+            return
+        
+        # Create inner frame for grid layout
+        inner_frame = tk.Frame(self.node_buttons_frame, bg=COLORS['white'])
+        inner_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create buttons in a grid (4 columns)
+        cols = 4
+        for i, node in enumerate(nodes):
+            row = i // cols
+            col = i % cols
+            
+            city_name = self.network.get_city_name(node)
+            short_name = city_name[:4]  # Shortened name for button
+            
+            # Determine button color based on node status
+            is_disabled = node in self.network.disabled_nodes
+            btn_color = COLORS['danger'] if is_disabled else COLORS['success']
+            btn_text = f"❌{short_name}" if is_disabled else f"✅{short_name}"
+            
+            btn = tk.Button(inner_frame, text=btn_text,
+                           font=("Segoe UI", 7, "bold"),
+                           fg=COLORS['white'], bg=btn_color,
+                           activebackground=COLORS['dark'],
+                           activeforeground=COLORS['white'],
+                           relief=tk.RAISED, cursor="hand2",
+                           width=6,
+                           command=lambda n=node: self._toggle_node_status(n))
+            btn.grid(row=row, column=col, padx=2, pady=2, sticky='nsew')
+            
+            # Store button reference
+            self.node_buttons[node] = btn
+        
+        # Configure grid columns to expand evenly
+        for c in range(cols):
+            inner_frame.columnconfigure(c, weight=1)
+    
+    def _toggle_node_status(self, node):
+        """Toggle a node between enabled and disabled state."""
+        city_name = self.network.get_city_name(node)
+        
+        if node in self.network.disabled_nodes:
+            # Enable the node
+            self.network.enable_node(node)
+            action = "ENABLED"
+            color = COLORS['success']
+        else:
+            # Disable the node
+            self.network.disable_node(node)
+            action = "DISABLED"
+            color = COLORS['danger']
+        
+        # Update the button appearance
+        self._update_node_buttons()
+        
+        # Find disconnected nodes
+        disconnected = self.network.get_disconnected_nodes()
+        
+        # Update status
+        self.status_area.delete(1.0, tk.END)
+        text = f"💥 NODE {action}\n"
+        text += "━" * 30 + "\n\n"
+        text += f"Node: {node} ({city_name})\n\n"
+        text += f"📊 Total Disabled: {len(self.network.disabled_nodes)}\n"
+        
+        if self.network.disabled_nodes:
+            text += f"   Disabled: {list(self.network.disabled_nodes)}\n\n"
+        
+        if disconnected:
+            text += f"\n⚠️ DISCONNECTED NODES:\n"
+            for dn in disconnected:
+                dn_name = self.network.get_city_name(dn)
+                text += f"   🟠 {dn_name} ({dn})\n"
+        
+        self.status_area.insert(1.0, text)
+        
+        # Redraw canvas to show changes
+        self._draw_canvas()
+    
+    def _update_node_buttons(self):
+        """Update all node button appearances based on current status."""
+        for node, btn in self.node_buttons.items():
+            city_name = self.network.get_city_name(node)
+            short_name = city_name[:4]
+            
+            is_disabled = node in self.network.disabled_nodes
+            btn_color = COLORS['danger'] if is_disabled else COLORS['success']
+            btn_text = f"❌{short_name}" if is_disabled else f"✅{short_name}"
+            
+            btn.configure(text=btn_text, bg=btn_color)
+    
+    def _on_reset_nodes_click(self):
+        """Reset all nodes to enabled state."""
+        self.network.disabled_nodes.clear()
+        self._update_node_buttons()
+        
+        self.status_area.delete(1.0, tk.END)
+        self.status_area.insert(1.0, "✅ ALL NODES RESTORED\n" + "━" * 30 + "\n\n"
+                               "All nodes have been re-enabled.\n"
+                               "Network is fully operational.")
+        self._draw_canvas()
+
     def _draw_canvas(self):
         """Draw network on canvas with city names."""
         self.canvas.delete("all")
@@ -571,14 +805,18 @@ class SimulatorUI:
             x1, y1 = transform(self.pos[u][0], self.pos[u][1])
             x2, y2 = transform(self.pos[v][0], self.pos[v][1])
             
-            if u in self.network.get_disabled_nodes() or v in self.network.get_disabled_nodes():
+            # Check if edge is vulnerable (shown as RED DOTTED line)
+            is_vulnerable = self.network.is_edge_vulnerable(u, v)
+            
+            if is_vulnerable:
+                # Vulnerable road - RED DOTTED LINE
+                edge_color = COLORS['danger']  # Red
+                dash_pattern = (8, 6)  # Dotted
+                edge_width = 4
+            elif u in self.network.get_disabled_nodes() or v in self.network.get_disabled_nodes():
                 edge_color = COLORS['edge_default']
                 dash_pattern = (8, 8)
                 edge_width = 2
-            elif self.network.is_edge_vulnerable(u, v):
-                edge_color = COLORS['edge_vulnerable']
-                dash_pattern = (6, 4)
-                edge_width = 3
             elif (u, v) in self.mst_edges or (v, u) in self.mst_edges:
                 edge_color = COLORS['edge_mst']
                 dash_pattern = ()
@@ -609,16 +847,27 @@ class SimulatorUI:
         
         # Draw nodes with city names
         node_radius = 28
+        disconnected_nodes = self.network.get_disconnected_nodes()
+        
         for node in self.network.get_nodes():
             x, y = transform(self.pos[node][0], self.pos[node][1])
             city_name = self.network.get_city_name(node)
             
+            # Determine node color based on state
             if node in self.network.get_disabled_nodes():
+                # Disabled node - red with X pattern
                 node_color = COLORS['node_disabled']
                 outline_color = COLORS['danger']
+                is_disabled = True
+            elif node in disconnected_nodes:
+                # Disconnected node - orange/warning
+                node_color = COLORS['warning']
+                outline_color = COLORS['danger']
+                is_disabled = False
             else:
                 node_color = COLORS['node_default']
                 outline_color = COLORS['primary']
+                is_disabled = False
             
             # Draw node shadow
             self.canvas.create_oval(x-node_radius+3, y-node_radius+3, 
@@ -630,45 +879,71 @@ class SimulatorUI:
                                    x+node_radius, y+node_radius, 
                                    fill=node_color, outline=outline_color, width=3)
             
+            # Draw X for disabled nodes
+            if node in self.network.get_disabled_nodes():
+                self.canvas.create_line(x-15, y-15, x+15, y+15, 
+                                       fill=COLORS['danger'], width=3)
+                self.canvas.create_line(x+15, y-15, x-15, y+15, 
+                                       fill=COLORS['danger'], width=3)
+            
             # Draw node ID
             self.canvas.create_text(x, y-6, text=str(node), 
                                    font=("Segoe UI", 11, "bold"), fill=COLORS['dark'])
             
             # Draw city name below node
-            self.canvas.create_text(x, y+node_radius+12, text=city_name,
-                                   font=("Segoe UI", 9, "bold"), fill=COLORS['dark'])
+            label_color = COLORS['danger'] if node in self.network.get_disabled_nodes() else COLORS['dark']
+            status_text = f"{city_name}" + (" [OFF]" if node in self.network.get_disabled_nodes() else "")
+            self.canvas.create_text(x, y+node_radius+12, text=status_text,
+                                   font=("Segoe UI", 9, "bold"), fill=label_color)
     
     def _draw_legend(self, width, height):
         """Draw a legend on the canvas."""
         legend_x = width - 145
         legend_y = 60
         
-        # Legend background with shadow effect
+        # Legend background with shadow effect (taller for more items)
         self.canvas.create_rectangle(legend_x - 12, legend_y - 22, 
-                                    legend_x + 133, legend_y + 133,
+                                    legend_x + 140, legend_y + 185,
                                     fill='#e5e7eb', outline='')
         self.canvas.create_rectangle(legend_x - 15, legend_y - 25, 
-                                    legend_x + 130, legend_y + 130,
+                                    legend_x + 137, legend_y + 182,
                                     fill=COLORS['white'], outline=COLORS['primary'], width=2)
         
-        self.canvas.create_text(legend_x + 57, legend_y - 8, text="🗺️ LEGEND",
+        self.canvas.create_text(legend_x + 60, legend_y - 8, text="🗺️ LEGEND",
                                font=("Segoe UI", 10, "bold"), fill=COLORS['dark'])
         
-        # Define legend items with their styles (color, label, dashed)
-        legend_items = [
+        # Edge legend items
+        edge_items = [
             (COLORS['edge_mst'], "MST Edge", False),
-            (COLORS['edge_path1'], "Primary (Green)", False),
-            (COLORS['edge_path2'], "Backup (Orange)", False),
-            (COLORS['edge_vulnerable'], "Dangerous Road", False),
+            (COLORS['edge_path1'], "Primary Path", False),
+            (COLORS['edge_path2'], "Backup Path", False),
+            (COLORS['danger'], "Vulnerable Road", True),
         ]
         
-        for i, (color, label, is_dashed) in enumerate(legend_items):
-            y_pos = legend_y + 18 + i * 28
-            dash = (6, 4) if is_dashed else ()
-            self.canvas.create_line(legend_x, y_pos, legend_x + 35, y_pos, 
+        for i, (color, label, is_dashed) in enumerate(edge_items):
+            y_pos = legend_y + 18 + i * 24
+            dash = (8, 6) if is_dashed else ()
+            self.canvas.create_line(legend_x, y_pos, legend_x + 30, y_pos, 
                                    fill=color, width=4, dash=dash)
-            self.canvas.create_text(legend_x + 45, y_pos, text=label,
-                                   font=("Segoe UI", 9), anchor="w", fill=COLORS['dark'])
+            self.canvas.create_text(legend_x + 40, y_pos, text=label,
+                                   font=("Segoe UI", 8), anchor="w", fill=COLORS['dark'])
+        
+        # Node legend items
+        node_y_start = legend_y + 115
+        self.canvas.create_text(legend_x + 60, node_y_start, text="─ Nodes ─",
+                               font=("Segoe UI", 8), fill=COLORS['edge_default'])
+        
+        node_items = [
+            (COLORS['node_disabled'], COLORS['danger'], "Disabled [X]"),
+            (COLORS['warning'], COLORS['danger'], "Disconnected"),
+        ]
+        
+        for i, (fill_color, outline_color, label) in enumerate(node_items):
+            y_pos = node_y_start + 20 + i * 24
+            self.canvas.create_oval(legend_x, y_pos - 8, legend_x + 16, y_pos + 8, 
+                                   fill=fill_color, outline=outline_color, width=2)
+            self.canvas.create_text(legend_x + 25, y_pos, text=label,
+                                   font=("Segoe UI", 8), anchor="w", fill=COLORS['dark'])
     
     def _on_mst_click(self):
         """Handle MST computation with city names."""
@@ -894,59 +1169,6 @@ class SimulatorUI:
             self._draw_bst_tree_network_style(node['right'], right_x, right_y, x_offset_new,
                                                is_optimized, section_height, depth + 1)
     
-    def _on_failure_click(self):
-        """Handle node failure simulation with city names."""
-        try:
-            # Create a custom dialog with city names
-            dialog = tk.Toplevel(self.root)
-            dialog.title("💥 Simulate Node Failure")
-            dialog.geometry("350x200")
-            dialog.transient(self.root)
-            dialog.grab_set()
-            dialog.configure(bg=COLORS['light'])
-            
-            tk.Label(dialog, text="Select City to Disable:", 
-                    font=("Segoe UI", 12, "bold"),
-                    bg=COLORS['light'], fg=COLORS['dark']).pack(pady=15)
-            
-            # Dropdown with city names
-            city_var = tk.StringVar()
-            city_values = [f"{node} - {self.network.get_city_name(node)}" 
-                          for node in self.network.get_nodes() 
-                          if node not in self.network.get_disabled_nodes()]
-            
-            city_combo = ttk.Combobox(dialog, textvariable=city_var,
-                                      values=city_values, state="readonly", width=30)
-            city_combo.pack(pady=10)
-            
-            def disable_city():
-                try:
-                    selection = city_var.get()
-                    node = int(selection.split(" - ")[0])
-                    city_name = self.network.get_city_name(node)
-                    
-                    if self.network.disable_node(node):
-                        self.status_area.delete(1.0, tk.END)
-                        text = f"💥 NODE FAILURE SIMULATED\n"
-                        text += "━" * 35 + "\n\n"
-                        text += f"❌ {city_name} (Node {node}) OFFLINE\n\n"
-                        text += "System is rerouting traffic...\n"
-                        text += "Consider finding alternate paths."
-                        self.status_area.insert(1.0, text)
-                        self._draw_canvas()
-                        dialog.destroy()
-                except Exception as e:
-                    messagebox.showerror("Error", f"Failed to disable node: {str(e)}")
-            
-            btn = tk.Button(dialog, text="🔴 Disable City",
-                           command=disable_city,
-                           font=("Segoe UI", 10, "bold"),
-                           fg=COLORS['white'], bg=COLORS['danger'],
-                           relief=tk.FLAT, padx=20, pady=8)
-            btn.pack(pady=20)
-        except:
-            pass
-    
     def _on_coloring_click(self):
         """Handle graph coloring with visualization and city names."""
         # Apply graph coloring algorithm
@@ -1087,7 +1309,7 @@ class SimulatorUI:
     def _on_reset_click(self):
         """Reset simulator with enhanced feedback."""
         self.network = NetworkGraph()
-        self.path_finder = PathFinder(self.network.graph, self.network.vulnerable_edges)
+        self.path_finder = PathFinder(self.network.graph, self.network)
         self.selected_paths = []
         self.mst_edges = []
         self.path1_edges = []
@@ -1106,130 +1328,244 @@ class SimulatorUI:
         text += "━" * 35 + "\n\n"
         text += "✅ Network restored to default\n"
         text += "✅ All paths cleared\n"
-        text += "✅ All nodes active\n\n"
+        text += "✅ All vulnerable roads cleared\n\n"
         text += "Ready for new simulations!"
         self.status_area.insert(1.0, text)
         self._draw_canvas()
     
     def _on_mark_vulnerable_click(self):
-        """Mark an edge as vulnerable with city names."""
+        """Mark an edge as vulnerable (shown as red dotted line)."""
         try:
             dialog = tk.Toplevel(self.root)
             dialog.title("⚠️ Mark Road as Vulnerable")
-            dialog.geometry("350x220")
+            dialog.geometry("380x280")
             dialog.transient(self.root)
             dialog.grab_set()
             dialog.configure(bg=COLORS['light'])
             
-            tk.Label(dialog, text="Select Road to Mark Dangerous:", 
-                    font=("Segoe UI", 11, "bold"),
-                    bg=COLORS['light'], fg=COLORS['dark']).pack(pady=10)
+            tk.Label(dialog, text="Select Road to Mark Vulnerable:", 
+                    font=("Segoe UI", 12, "bold"),
+                    bg=COLORS['light'], fg=COLORS['dark']).pack(pady=15)
             
-            city_values = [f"{node} - {self.network.get_city_name(node)}" for node in self.network.get_nodes()]
+            # Get available edges (exclude already vulnerable ones)
+            available_edges = [(u, v) for u, v in self.network.graph.edges() 
+                              if not self.network.is_edge_vulnerable(u, v)]
+            edge_values = [f"{self.network.get_city_name(u)} ↔ {self.network.get_city_name(v)} (weight: {self.network.graph[u][v]['weight']})"
+                          for u, v in available_edges]
             
-            tk.Label(dialog, text="From City:", font=("Segoe UI", 10),
+            tk.Label(dialog, text="Select Road:", font=("Segoe UI", 10),
                     bg=COLORS['light']).pack()
-            node1_var = tk.StringVar()
-            ttk.Combobox(dialog, textvariable=node1_var, values=city_values, 
-                        state="readonly", width=28).pack(pady=5)
-            
-            tk.Label(dialog, text="To City:", font=("Segoe UI", 10),
-                    bg=COLORS['light']).pack()
-            node2_var = tk.StringVar()
-            ttk.Combobox(dialog, textvariable=node2_var, values=city_values,
-                        state="readonly", width=28).pack(pady=5)
+            edge_var = tk.StringVar()
+            edge_combo = ttk.Combobox(dialog, textvariable=edge_var,
+                                      values=edge_values, state="readonly", width=40)
+            edge_combo.pack(pady=10)
             
             def mark_edge():
                 try:
-                    u = int(node1_var.get().split(" - ")[0])
-                    v = int(node2_var.get().split(" - ")[0])
-                    
-                    if self.network.graph.has_edge(u, v):
-                        self.network.mark_vulnerable_edge(u, v)
+                    selection = edge_combo.current()
+                    if selection >= 0:
+                        u, v = available_edges[selection]
+                        weight = self.network.graph[u][v]['weight']
                         city_u = self.network.get_city_name(u)
                         city_v = self.network.get_city_name(v)
+                        
+                        self.network.mark_vulnerable_edge(u, v)
+                        
                         self.status_area.delete(1.0, tk.END)
                         text = f"⚠️ ROAD MARKED VULNERABLE\n"
                         text += "━" * 35 + "\n\n"
-                        text += f"🚧 {city_u} ↔ {city_v}\n\n"
-                        text += "This road will be avoided\n"
-                        text += "when finding reliable paths."
+                        text += f"🚧 Road Marked:\n"
+                        text += f"   {city_u} ↔ {city_v}\n"
+                        text += f"   (Weight: {weight})\n\n"
+                        text += f"📊 Vulnerable Roads: {len(self.network.vulnerable_edges)}\n\n"
+                        text += "🔴 Shown as RED DOTTED line\n"
+                        text += "Pathfinding will avoid this road!"
                         self.status_area.insert(1.0, text)
                         self._draw_canvas()
                         dialog.destroy()
-                    else:
-                        messagebox.showerror("Error", f"No direct road between these cities")
                 except Exception as e:
-                    messagebox.showerror("Error", "Please select valid cities")
+                    messagebox.showerror("Error", f"Failed to mark edge: {str(e)}")
             
-            btn = tk.Button(dialog, text="🚧 Mark as Vulnerable", command=mark_edge,
+            btn = tk.Button(dialog, text="🚧 Mark as Vulnerable",
+                           command=mark_edge,
                            font=("Segoe UI", 10, "bold"),
                            fg=COLORS['white'], bg=COLORS['danger'],
                            relief=tk.FLAT, padx=20, pady=8)
-            btn.pack(pady=15)
-        except:
-            pass
+            btn.pack(pady=20)
+            
+            # Show current vulnerable edges count
+            if self.network.vulnerable_edges:
+                vuln_text = f"Currently vulnerable: {len(self.network.vulnerable_edges)} road(s)"
+                tk.Label(dialog, text=vuln_text, font=("Segoe UI", 9),
+                        bg=COLORS['light'], fg=COLORS['danger']).pack(pady=5)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
     
     def _on_unmark_vulnerable_click(self):
-        """Unmark a vulnerable edge with city names."""
+        """Unmark a vulnerable edge (restore to normal)."""
         try:
+            if not self.network.vulnerable_edges:
+                messagebox.showinfo("Info", "No vulnerable roads to restore!")
+                return
+            
             dialog = tk.Toplevel(self.root)
             dialog.title("✅ Unmark Vulnerable Road")
-            dialog.geometry("350x220")
+            dialog.geometry("380x250")
             dialog.transient(self.root)
             dialog.grab_set()
             dialog.configure(bg=COLORS['light'])
             
             tk.Label(dialog, text="Select Road to Restore:", 
-                    font=("Segoe UI", 11, "bold"),
-                    bg=COLORS['light'], fg=COLORS['dark']).pack(pady=10)
+                    font=("Segoe UI", 12, "bold"),
+                    bg=COLORS['light'], fg=COLORS['dark']).pack(pady=15)
             
             # Show only vulnerable edges
-            vulnerable_roads = []
-            for u, v in self.network.get_vulnerable_edges():
-                city_u = self.network.get_city_name(u)
-                city_v = self.network.get_city_name(v)
-                vulnerable_roads.append(f"{u}-{v}: {city_u} ↔ {city_v}")
+            vulnerable_list = list(self.network.vulnerable_edges)
+            edge_values = [f"{self.network.get_city_name(u)} ↔ {self.network.get_city_name(v)} (weight: {self.network.graph[u][v]['weight']})"
+                          for u, v in vulnerable_list]
             
-            if not vulnerable_roads:
-                tk.Label(dialog, text="No vulnerable roads to unmark", 
-                        font=("Segoe UI", 10),
-                        bg=COLORS['light'], fg=COLORS['edge_default']).pack(pady=30)
-                return
-            
-            tk.Label(dialog, text="Vulnerable Road:", font=("Segoe UI", 10),
-                    bg=COLORS['light']).pack()
-            road_var = tk.StringVar()
-            ttk.Combobox(dialog, textvariable=road_var, values=vulnerable_roads,
-                        state="readonly", width=28).pack(pady=10)
+            edge_var = tk.StringVar()
+            edge_combo = ttk.Combobox(dialog, textvariable=edge_var,
+                                      values=edge_values, state="readonly", width=40)
+            edge_combo.pack(pady=10)
             
             def unmark_edge():
                 try:
-                    selection = road_var.get()
-                    edge_part = selection.split(":")[0]
-                    u, v = map(int, edge_part.split("-"))
-                    
-                    self.network.unmark_vulnerable_edge(u, v)
-                    city_u = self.network.get_city_name(u)
-                    city_v = self.network.get_city_name(v)
-                    self.status_area.delete(1.0, tk.END)
-                    text = f"✅ ROAD RESTORED\n"
-                    text += "━" * 35 + "\n\n"
-                    text += f"🛣️ {city_u} ↔ {city_v}\n\n"
-                    text += "Road is now safe for routing."
-                    self.status_area.insert(1.0, text)
-                    self._draw_canvas()
-                    dialog.destroy()
+                    selection = edge_combo.current()
+                    if selection >= 0:
+                        u, v = vulnerable_list[selection]
+                        weight = self.network.graph[u][v]['weight']
+                        city_u = self.network.get_city_name(u)
+                        city_v = self.network.get_city_name(v)
+                        
+                        self.network.unmark_vulnerable_edge(u, v)
+                        
+                        self.status_area.delete(1.0, tk.END)
+                        text = f"✅ ROAD RESTORED\n"
+                        text += "━" * 35 + "\n\n"
+                        text += f"🛣️ Road Restored:\n"
+                        text += f"   {city_u} ↔ {city_v}\n"
+                        text += f"   (Weight: {weight})\n\n"
+                        remaining = len(self.network.vulnerable_edges)
+                        text += f"📊 Remaining Vulnerable: {remaining}\n\n"
+                        text += "Road is now safe for routing!"
+                        self.status_area.insert(1.0, text)
+                        self._draw_canvas()
+                        dialog.destroy()
                 except Exception as e:
-                    messagebox.showerror("Error", "Please select a road")
+                    messagebox.showerror("Error", f"Failed to restore road: {str(e)}")
             
-            btn = tk.Button(dialog, text="✅ Restore Road", command=unmark_edge,
+            btn = tk.Button(dialog, text="✅ Restore Road",
+                           command=unmark_edge,
                            font=("Segoe UI", 10, "bold"),
                            fg=COLORS['white'], bg=COLORS['success'],
                            relief=tk.FLAT, padx=20, pady=8)
-            btn.pack(pady=15)
-        except:
-            pass
+            btn.pack(pady=20)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+    
+    def _on_analyze_failure_click(self):
+        """Analyze network impact of current failures."""
+        try:
+            src_text = self.source_var.get()
+            tgt_text = self.target_var.get()
+            
+            if not src_text or not tgt_text:
+                messagebox.showinfo("Info", "Please select source and destination first!")
+                return
+            
+            src = int(src_text.split(" - ")[0])
+            tgt = int(tgt_text.split(" - ")[0])
+            
+            src_name = self.network.get_city_name(src)
+            tgt_name = self.network.get_city_name(tgt)
+            
+            # Original path (no failures)
+            try:
+                original_path = nx.shortest_path(self.network.graph, src, tgt, weight='weight')
+                original_cost = self.network.get_path_cost(original_path)
+                original_path_str = ' → '.join([self.network.get_city_name(n) for n in original_path])
+            except:
+                original_path = None
+                original_cost = float('inf')
+                original_path_str = "N/A"
+            
+            # Current path (with failures)
+            working_graph = self.network.get_working_graph()
+            # Also remove vulnerable edges
+            for u, v in self.network.vulnerable_edges:
+                if working_graph.has_edge(u, v):
+                    working_graph.remove_edge(u, v)
+            
+            try:
+                current_path = nx.shortest_path(working_graph, src, tgt, weight='weight')
+                current_cost = sum(working_graph[current_path[i]][current_path[i+1]]['weight'] 
+                                  for i in range(len(current_path)-1))
+                current_path_str = ' → '.join([self.network.get_city_name(n) for n in current_path])
+            except:
+                current_path = None
+                current_cost = float('inf')
+                current_path_str = "DISCONNECTED"
+            
+            # Disconnected nodes
+            disconnected = self.network.get_disconnected_nodes()
+            
+            # Build report
+            self.status_area.delete(1.0, tk.END)
+            text = "📊 NETWORK IMPACT ANALYSIS\n"
+            text += "━" * 35 + "\n\n"
+            
+            text += f"🚩 Route: {src_name} → {tgt_name}\n\n"
+            
+            text += "─" * 35 + "\n"
+            text += "BEFORE FAILURES:\n"
+            text += f"   Path: {original_path_str}\n"
+            text += f"   Cost: {original_cost} km\n\n"
+            
+            text += "AFTER FAILURES:\n"
+            text += f"   Path: {current_path_str}\n"
+            if current_path:
+                text += f"   Cost: {current_cost} km\n\n"
+                
+                # Impact calculation
+                increase = current_cost - original_cost
+                pct = (increase / original_cost * 100) if original_cost > 0 else 0
+                text += "─" * 35 + "\n"
+                text += "📈 IMPACT SUMMARY:\n"
+                text += f"   Time/Distance Increase: {increase} km\n"
+                text += f"   Percentage Increase: {pct:.1f}%\n"
+            else:
+                text += f"   ❌ NO PATH AVAILABLE!\n\n"
+                text += "─" * 35 + "\n"
+                text += "⚠️ CRITICAL: Route disconnected!\n"
+            
+            # Show failures
+            text += "\n─" * 35 + "\n"
+            text += f"🔴 Disabled Nodes: {len(self.network.disabled_nodes)}\n"
+            for dn in self.network.disabled_nodes:
+                text += f"   • {self.network.get_city_name(dn)}\n"
+            
+            text += f"\n🚧 Vulnerable Roads: {len(self.network.vulnerable_edges)}\n"
+            for u, v in self.network.vulnerable_edges:
+                text += f"   • {self.network.get_city_name(u)} ↔ {self.network.get_city_name(v)}\n"
+            
+            if disconnected:
+                text += f"\n⚠️ Disconnected Nodes: {len(disconnected)}\n"
+                for dn in disconnected:
+                    text += f"   • {self.network.get_city_name(dn)}\n"
+            
+            self.status_area.insert(1.0, text)
+            
+            # Store paths for visualization
+            if current_path:
+                self.path1_edges = [[current_path[i], current_path[i+1]] for i in range(len(current_path)-1)]
+            else:
+                self.path1_edges = []
+            self.path2_edges = []
+            self._draw_canvas()
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Analysis failed: {str(e)}")
     
     def _on_canvas_doubleclick(self, event):
         """Handle double-click on canvas to add new node with city name."""
@@ -1294,7 +1630,7 @@ class SimulatorUI:
             self.pos[new_node] = (graph_x, graph_y)
             
             # Update path finder with new graph
-            self.path_finder = PathFinder(self.network.graph, self.network.vulnerable_edges)
+            self.path_finder = PathFinder(self.network.graph, self.network)
             
             # Update dropdown menus with new node
             city_values = [f"{node} - {self.network.get_city_name(node)}" for node in self.network.get_nodes()]
